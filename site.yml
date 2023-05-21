@@ -1,0 +1,87 @@
+---
+- name: Get lighthouse
+  hosts: lighthouse
+  pre_tasks:
+    - name: Install GIT
+      become: true
+      yum:
+        name: git
+        state: present
+  tasks:
+    - name: Get lighthouse distrib
+      git:
+        repo: "{{ url_to_lighthouse }}"
+        dest: "{{ site_path }}"
+        accept_hostkey: yes
+
+- name: Prepare NGINX
+  hosts: lighthouse
+  handlers:
+    - name: start nginx
+      become: true
+      command: nginx
+    - name: restart nginx
+      become: true
+      command: nginx -s reload
+  pre_tasks:
+    - name: Install the 'Development tools' package group
+      become: true
+      yum:
+        name: "@Development tools"
+        state: present
+  tasks:
+    - name: Get NGINX version
+      command: nginx -v
+      register: nginx_version_result
+      ignore_errors: true
+      changed_when: false
+    - block:
+      - name: Get NGINX distrib
+        get_url:
+          url: "https://nginx.org/download/nginx-{{ nginx_version }}.tar.gz"
+          dest: /tmp
+      - name: Unpack nginx distrib
+        ansible.builtin.unarchive:
+          src: /tmp/nginx-{{ nginx_version }}.tar.gz
+          dest: /tmp
+          remote_src: true
+      - name: Configure NGINX
+        command: 
+          cmd: ./configure --without-http_rewrite_module --without-http_gzip_module
+          chdir: /tmp/nginx-{{ nginx_version }}
+      - name: Make NGINX
+        command: 
+          cmd: make
+          chdir: /tmp/nginx-{{ nginx_version }}
+      - name: Install NGINX
+        become: true
+        command: 
+          cmd: make install
+          chdir: /tmp/nginx-{{ nginx_version }}
+        notify: start nginx
+      - name: Make NGINX callable
+        become: true
+        command: ln -s /usr/local/nginx/sbin/nginx /usr/bin/nginx
+      when:
+        - nginx_version_result.failed == true
+        - nginx_version not in nginx_version_result.stdout
+    - name: Configure nginx config for site
+      become: true
+      template:
+        src: nginx.cfg.j2
+        dest: /usr/local/nginx/conf/nginx.conf
+        mode: 0644
+      notify: restart nginx
+    - name: Assure that directory conf.d exist
+      become: true
+      file:
+        path: /usr/local/nginx/conf/conf.d
+        state:  directory
+        mode: 0644
+    - name: Make config for lighthouse
+      become: true
+      template:
+        src: default.cfg.j2
+        dest: /usr/local/nginx/conf/conf.d/default.conf
+        mode: 0644
+      notify: restart nginx
